@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+import uuid
+
 from pytext.common.utils import eprint
 
 from .pytext_config import LATEST_VERSION, PyTextConfig
-
 
 ADAPTERS = {}
 DOWNGRADE_ADAPTERS = {}
@@ -741,6 +742,7 @@ def upgrade_export_config(json_config):
         "inference_interface",
         "seq_padding_control",
         "batch_padding_control",
+        "target",
     ]
 
     export_config = {}
@@ -794,6 +796,71 @@ def v24_to_v23(json_config):
         json_config["export"] = json_config["export_list"][0]
         del json_config["export_list"]
     return json_config
+
+
+@register_down_grade_adapter(from_version=25)
+def v25_to_v24(json_config):
+    """
+    Downgrade by removing target option from all
+    exports in export_list
+    """
+    export_list = json_config["export_list"]
+    for export_cfg in export_list:
+        if "target" in export_cfg:
+            print("Current version does not support target param in export")
+            del export_cfg["target"]
+    json_config["export_list"] = export_list
+    return json_config
+
+
+@register_adapter(from_version=24)
+def v24_to_v25(json_config):
+    if "export_list" not in json_config:
+        if "export" in json_config:
+            export_list = [json_config["export"]]
+        else:
+            export_list = []
+    else:
+        export_list = json_config["export_list"]
+    for export_cfg in export_list:
+        if "target" not in export_cfg:
+            tgt = get_name_from_options(export_cfg)
+            export_cfg["target"] = tgt
+        if "inference_interface" in export_cfg:
+            del export_cfg["inference_interface"]
+
+    json_config["export_list"] = export_list
+    return json_config
+
+
+def get_name_from_options(export_config):
+    """
+    Reverse engineer which model is which based on recognized
+    export configurations. If the export configurations don't adhere
+    to the set of recognized backends, then set target name to random
+    since the field is required.
+    """
+    if "accelerate" in export_config and len(export_config["accelerate"]) != 0:
+        if export_config["accelerate"][0] == "cuda:half":
+            tgt = "gpu-fp16"
+        elif (
+            export_config["accelerate"][0] == "nnpi"
+            and "seq_padding_control" in export_config
+            and "batch_padding_control" in export_config
+        ):
+            tgt = "nnpi"
+        else:
+            pass
+    elif "torchscript_quantize" in export_config:
+        if export_config["torchscript_quantize"] is False:
+            tgt = "gpu-fp32"
+        elif export_config["torchscript_quantize"] is True:
+            tgt = "cpu"
+        else:
+            pass
+    else:
+        tgt = str(uuid.uuid4())
+    return tgt
 
 
 def upgrade_one_version(json_config):
